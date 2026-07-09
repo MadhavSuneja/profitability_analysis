@@ -4,4 +4,8 @@ numpy
 plotly
 matplotlib
 seaborn
+<<<<<<< HEAD
 scikit-learn
+=======
+scikit-learn
+>>>>>>> dba36ec2afc6760e9c4650f12c252c79b91f681b
