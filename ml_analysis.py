@@ -1,31 +1,6 @@
-#!/usr/bin/env python
-# coding: utf-8
-"""
-Nassau Candy Distributor — ML Tools Module
-============================================
-This script sits ON TOP of the cleaned Analytical Methodology output
-(Data_clean / product_profitability / product_cost_analysis) and adds four
-data-driven techniques that the rule-based thresholds (medians, 80% cut-offs,
-fixed % flags) cannot provide:
-
-    1. Product Segmentation      -> KMeans clustering (unsupervised)
-    2. Margin Driver Modelling   -> Random Forest Regression (supervised)
-    3. Anomaly / Fraud Detection -> Isolation Forest (unsupervised)
-    4. Sales Forecasting         -> Linear trend + moving average (time series)
-    5. Discontinuation Risk      -> Logistic Regression classifier (supervised)
-
-Install requirements (once):
-    pip install pandas numpy scikit-learn matplotlib --break-system-packages
-
-Run:
-    python ml_analysis.py
-"""
-
+import os
 import pandas as pd
 import numpy as np
-import warnings
-warnings.filterwarnings("ignore")
-
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
@@ -36,7 +11,11 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, r2_score, classification_report
 
-RAW_PATH = "Nassau Candy Distributor.csv"   
+RAW_PATH = "Nassau Candy Distributor.csv"
+
+# Create outputs directory
+OUTPUT_DIR = "outputs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # STEP 0 — Load & clean raw data
@@ -126,7 +105,7 @@ def segment_products(prod, k=4):
         if high_margin and high_sales:
             return "Star (high sales, high margin)"
         if high_sales and not high_margin:
-            return "Cash flow (high sales, low margin)"
+            return "Cash Cow (high sales, low margin)"
         if not high_sales and high_margin:
             return "Niche (low sales, high margin)"
         return "Underperformer (low sales, low margin)"
@@ -138,9 +117,6 @@ def segment_products(prod, k=4):
 
 # ---------------------------------------------------------------------------
 # 2) MARGIN DRIVER MODEL — Random Forest Regression
-#    Answers "what actually drives a transaction's margin?" instead of just
-#    reporting margin after the fact. Feature importances rank Division,
-#    Ship Mode, Region, Units and Sales by predictive power.
 # ---------------------------------------------------------------------------
 def margin_driver_model(df):
     features = ["Division", "Ship Mode", "Region", "Units", "Sales"]
@@ -182,10 +158,6 @@ def margin_driver_model(df):
 
 # ---------------------------------------------------------------------------
 # 3) ANOMALY DETECTION — Isolation Forest
-#    Flags transactions that look statistically abnormal on Sales/Cost/Units
-#    jointly — catches data-entry errors or pricing anomalies that simple
-#    ">= 80% cost-to-sales" style thresholds miss (e.g. a normal-margin row
-#    with an impossibly large unit count).
 # ---------------------------------------------------------------------------
 def detect_anomalies(df, contamination=0.02):
     feats = ["Sales", "Cost", "Units", "Gross_Margin_%"]
@@ -200,10 +172,7 @@ def detect_anomalies(df, contamination=0.02):
 
 
 # ---------------------------------------------------------------------------
-# 4) SALES FORECASTING — trend + moving average per Division
-#    Simple, dependency-free forecast (no Prophet/statsmodels required).
-#    Aggregates to monthly totals, fits a linear trend, and projects 3
-#    months forward per division for planning purposes.
+# 4) SALES FORECASTING — Linear Regression on monthly sales trends
 # ---------------------------------------------------------------------------
 def forecast_sales(df, periods_ahead=3):
     monthly = (
@@ -233,9 +202,6 @@ def forecast_sales(df, periods_ahead=3):
 
 # ---------------------------------------------------------------------------
 # 5) DISCONTINUATION-RISK CLASSIFIER — Logistic Regression
-#    Turns the rule-based "Discontinuation Review" flag (low sales + low
-#    profit vs median) into a probabilistic classifier, so new/future
-#    products can be scored without recomputing medians from scratch.
 # ---------------------------------------------------------------------------
 def discontinuation_risk_model(prod):
     sales_med = prod["Total_sales"].median()
@@ -261,50 +227,86 @@ def discontinuation_risk_model(prod):
 # MAIN
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+
     df = load_and_clean()
     prod = build_product_table(df)
 
     print("=" * 70)
     print("1) PRODUCT SEGMENTATION (KMeans)")
     print("=" * 70)
+
     prod_seg, scores, best_k = segment_products(prod)
+
     print(f"Silhouette scores by k: {scores}  -> chosen k = {best_k}")
     print(prod_seg[["Product Name", "Segment", "Gross_Margin_%", "Total_sales"]]
           .sort_values("Segment"))
 
+
     print("\n" + "=" * 70)
     print("2) MARGIN DRIVER MODEL (Random Forest Regression)")
     print("=" * 70)
+
     model, mae, r2, fi = margin_driver_model(df)
+
     print(f"Test MAE: {mae:.2f} margin points | Test R^2: {r2:.3f}")
     print("Top drivers of Gross Margin %:")
     print(fi.head(10))
 
+
     print("\n" + "=" * 70)
     print("3) ANOMALY DETECTION (Isolation Forest)")
     print("=" * 70)
+
     anomalies = detect_anomalies(df)
+
     print(f"Flagged {len(anomalies)} anomalous transactions out of {len(df)}")
     print(anomalies.head(15))
+
 
     print("\n" + "=" * 70)
     print("4) SALES FORECASTING (Linear trend, 3 months ahead)")
     print("=" * 70)
+
     monthly, fc = forecast_sales(df)
+
     print(fc)
+
 
     print("\n" + "=" * 70)
     print("5) DISCONTINUATION-RISK CLASSIFIER (Logistic Regression)")
     print("=" * 70)
+
     risk_table, report = discontinuation_risk_model(prod)
-    print(report if isinstance(report, str) else report)
+
+    print(report)
+
     if risk_table is not None:
         print(risk_table)
 
-    # Save everything for the Streamlit app to reuse
-    prod_seg.to_csv("product_segments.csv", index=False)
-    anomalies.to_csv("anomalies.csv", index=False)
-    fc.to_csv("sales_forecast.csv", index=False)
+
+    # -----------------------------------------------------------------------
+    # SAVE ML OUTPUT FILES
+    # -----------------------------------------------------------------------
+
+    prod_seg.to_csv(
+        os.path.join(OUTPUT_DIR, "product_segments.csv"),
+        index=False
+    )
+
+    anomalies.to_csv(
+        os.path.join(OUTPUT_DIR, "anomalies.csv"),
+        index=False
+    )
+
+    fc.to_csv(
+        os.path.join(OUTPUT_DIR, "sales_forecast.csv"),
+        index=False
+    )
+
     if risk_table is not None:
-        risk_table.to_csv("discontinuation_risk.csv", index=False)
-    print("\nSaved: product_segments.csv, anomalies.csv, sales_forecast.csv, discontinuation_risk.csv")
+        risk_table.to_csv(
+            os.path.join(OUTPUT_DIR, "discontinuation_risk.csv"),
+            index=False
+        )
+
+    print("\nML output files saved successfully in:", OUTPUT_DIR)
